@@ -28,18 +28,29 @@ def orchestrate(req: OrchestrateRequest):
 
     # v1: sentiment means "fetch recent text then score it"
     if "sentiment" in prompt_lower:
+        planned.append("tool:extract_ticker_query")
         planned.append("tool:fetch_text_data")
         planned.append("tool:sentiment_score")
 
-        # naive query: use the prompt as the search query (we'll improve later: extract ticker/entity)
-        fetch_res = TOOLS.get("fetch_text_data")(query=req.prompt, max_items=20, days=7)
+        from app.tools import TOOLS
+
+        # 1) Extract clean query from prompt
+        ex = TOOLS.get("extract_ticker_query")(text=req.prompt)
+        tool_outputs.append({"tool": "extract_ticker_query", "result": ex.model_dump()})
+
+        query = req.prompt
+        if ex.ok and ex.data and ex.data.get("query"):
+            query = ex.data["query"]
+
+        # 2) Fetch relevant items using the extracted query
+        fetch_res = TOOLS.get("fetch_text_data")(query=query, max_items=20, days=7)
         tool_outputs.append({"tool": "fetch_text_data", "result": fetch_res.model_dump()})
 
+        # 3) Score each item and aggregate
         agg = {"score": 0.0, "confidence": 0.0, "scored_items": 0}
         if fetch_res.ok and fetch_res.data and fetch_res.data.get("items"):
             scores = []
             confs = []
-
             for it in fetch_res.data["items"]:
                 text = it.get("text") or ""
                 sres = TOOLS.get("sentiment_score")(text=text)
@@ -53,6 +64,7 @@ def orchestrate(req: OrchestrateRequest):
                 agg["scored_items"] = len(scores)
 
         tool_outputs.append({"tool": "sentiment_aggregate", "result": {"ok": True, "data": agg}})
+
 
     if "document" in prompt_lower or "pdf" in prompt_lower:
         planned.append("rag")
