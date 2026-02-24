@@ -10,6 +10,13 @@ from cachetools import TTLCache
 
 from app.tools.registry import ToolResult
 
+import re
+_TAG_RE = re.compile(r"<[^>]+>")
+
+def _strip_html(s: str) -> str:
+    return _TAG_RE.sub("", s).replace("\xa0", " ").strip()
+
+
 # Cache results to avoid refetching the same query repeatedly during dev/testing.
 # Key: (query, max_items, days)
 _CACHE: TTLCache = TTLCache(maxsize=256, ttl=600)  # 10 minutes
@@ -78,13 +85,16 @@ def fetch_text_data(query: str, *, max_items: int = 20, days: int = 7) -> ToolRe
             continue
         seen.add(key)
 
-        text = " ".join([t for t in [title, summary] if t]).strip()
+        text_raw = " ".join([t for t in [title, summary] if t]).strip()
+        text = _strip_html(text_raw)
+
 
         items.append(
             {
                 "title": title,
                 "url": link,
                 "published_utc": published_dt.isoformat() if published_dt else None,
+                "text_raw": text_raw,
                 "text": text,
             }
         )

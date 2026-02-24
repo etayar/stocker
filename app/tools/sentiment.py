@@ -1,30 +1,39 @@
+from __future__ import annotations
+
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from app.tools.registry import ToolResult
+
+_ANALYZER = SentimentIntensityAnalyzer()
 
 def sentiment_score(text: str) -> ToolResult:
     """
-    v0 sentiment tool: simple deterministic heuristic.
-    Later we will replace this with VADER or a transformer model.
+    VADER sentiment tool.
+    Returns compound score in [-1, 1] + breakdown (pos/neu/neg).
     """
     if not text or not text.strip():
         return ToolResult(ok=False, error="Empty text")
 
-    positive_words = {"beat", "growth", "record", "upgrade", "profit", "strong", "surge"}
-    negative_words = {"miss", "lawsuit", "downgrade", "fraud", "weak", "loss", "crash"}
+    scores = _ANALYZER.polarity_scores(text)
 
-    words = {w.strip(".,!?;:()[]{}\"'").lower() for w in text.split()}
-    pos = len(words & positive_words)
-    neg = len(words & negative_words)
+    # VADER returns:
+    # - compound: overall sentiment in [-1, 1]
+    # - pos/neu/neg: proportions in [0, 1]
+    compound = float(scores.get("compound", 0.0))
+    pos = float(scores.get("pos", 0.0))
+    neu = float(scores.get("neu", 0.0))
+    neg = float(scores.get("neg", 0.0))
 
-    raw = pos - neg
+    # Simple confidence heuristic: more non-neutral => higher confidence.
+    # (Not a "true" statistical confidence, but useful for ranking/alerts.)
+    confidence = min(0.95, 0.25 + (1.0 - neu))
 
-    # Normalize to [-1, 1] in a simple way
-    if raw >= 3:
-        score = 1.0
-    elif raw <= -3:
-        score = -1.0
-    else:
-        score = raw / 3.0
-
-    confidence = 0.3 + min(0.6, (pos + neg) * 0.1)
-
-    return ToolResult(ok=True, data={"score": score, "confidence": confidence, "pos_hits": pos, "neg_hits": neg})
+    return ToolResult(
+        ok=True,
+        data={
+            "score": compound,
+            "confidence": confidence,
+            "pos": pos,
+            "neu": neu,
+            "neg": neg,
+        },
+    )
