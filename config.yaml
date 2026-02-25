@@ -1,0 +1,23 @@
+app:
+  name: stocker
+  host: 0.0.0.0
+  port: 8000
+  debug: false
+  log_level: info
+
+fetch:
+  source: google_news_rss
+  days: 7
+  max_items: 20
+  hl: en-US
+  gl: US
+  ceid: US:en
+
+sentiment:
+  model: heuristic   # later: "vader"
+  positive_threshold: 0.05
+  negative_threshold: -0.05
+
+orchestrator:
+  # used by extract_ticker_query to create the search query
+  ticker_query_template: '({ticker}) stock OR earnings OR shares'

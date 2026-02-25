@@ -5,3 +5,4 @@ httpx>=0.26
 cachetools>=5.3
 feedparser>=6.0
 vaderSentiment>=3.3.2
+PyYAML>=6.0

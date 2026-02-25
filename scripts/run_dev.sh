@@ -3,35 +3,37 @@ set -e
 
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
-
-# Use venv python explicitly (avoids system python mismatch)
 PY="./.venv/bin/python"
 
 if [ ! -x "$PY" ]; then
   echo "Error: venv python not found at $PY"
-  echo "Did you create the venv? Try: python3 -m venv .venv"
   exit 1
 fi
 
-# Check if port is already in use
-PID="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
+PIDS="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null || true)"
 
-if [ -n "$PID" ]; then
-  echo "Port $PORT is already in use by PID $PID"
-  echo "Process:"
-  ps -p "$PID" -o pid,comm,args
+if [ -n "$PIDS" ]; then
+  echo "Port $PORT is already in use by PID(s):"
+  echo "$PIDS"
+  echo ""
+  ps -p $PIDS -o pid,comm,args || true
 
   if [ "${1:-}" = "--kill" ]; then
-    echo "Killing PID $PID..."
-    kill -9 "$PID"
+    echo ""
+    echo "Killing PID(s)..."
+    kill -9 $PIDS
     echo "Killed. Starting server..."
   else
     echo ""
-    echo "To stop it, run:"
-    echo "  kill -9 $PID"
+    echo "To stop them, run:"
+    for p in $PIDS; do
+      echo "  kill -9 $p"
+    done
+    echo ""
     echo "Or restart using:"
     echo "  $0 --kill"
-    echo "Or run on another port, e.g.:"
+    echo ""
+    echo "Or run on another port:"
     echo "  PORT=8001 $0"
     exit 1
   fi

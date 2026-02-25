@@ -9,6 +9,7 @@ import httpx
 from cachetools import TTLCache
 
 from app.tools.registry import ToolResult
+from app.config import get_settings
 
 import re
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -34,6 +35,16 @@ def fetch_text_data(query: str, *, max_items: int = 20, days: int = 7) -> ToolRe
     if not query or not query.strip():
         return ToolResult(ok=False, error="Empty query")
 
+    settings = get_settings()
+    cfg = settings.fetch
+
+    days = int(cfg.get("days", days))
+    max_items = int(cfg.get("max_items", max_items))
+    hl = str(cfg.get("hl", "en-US"))
+    gl = str(cfg.get("gl", "US"))
+    ceid = str(cfg.get("ceid", "US:en"))
+
+
     max_items = max(1, min(int(max_items), 50))
     days = max(1, min(int(days), 30))
 
@@ -44,7 +55,7 @@ def fetch_text_data(query: str, *, max_items: int = 20, days: int = 7) -> ToolRe
     # Google News RSS search feed. (This is a public RSS endpoint.)
     # We keep the URL inside code (good practice for reproducibility).
     q = quote_plus(query.strip())
-    rss_url = f"https://news.google.com/rss/search?q={q}+when:{days}d&hl=en-US&gl=US&ceid=US:en"
+    rss_url = f"https://news.google.com/rss/search?q={q}+when:{days}d&hl={hl}&gl={gl}&ceid={ceid}"
 
     try:
         with httpx.Client(timeout=15.0, follow_redirects=True) as client:

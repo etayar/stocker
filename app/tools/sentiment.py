@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
 from app.tools.registry import ToolResult
+from app.config import get_settings
 
 _ANALYZER = SentimentIntensityAnalyzer()
 
@@ -12,6 +14,14 @@ def sentiment_score(text: str) -> ToolResult:
     """
     if not text or not text.strip():
         return ToolResult(ok=False, error="Empty text")
+
+    settings = get_settings()
+    model = str(settings.sentiment.get("model", "heuristic")).lower()
+
+    # If you want a switch (yaml/env) between models, enforce it here.
+    if model != "vader":
+        # For now: fallback behavior until you re-add heuristic if you want it.
+        return ToolResult(ok=False, error=f"Unsupported sentiment model: {model}. Set sentiment.model=vader")
 
     scores = _ANALYZER.polarity_scores(text)
 
@@ -24,12 +34,12 @@ def sentiment_score(text: str) -> ToolResult:
     neg = float(scores.get("neg", 0.0))
 
     # Simple confidence heuristic: more non-neutral => higher confidence.
-    # (Not a "true" statistical confidence, but useful for ranking/alerts.)
     confidence = min(0.95, 0.25 + (1.0 - neu))
 
     return ToolResult(
         ok=True,
         data={
+            "model": "vader",
             "score": compound,
             "confidence": confidence,
             "pos": pos,

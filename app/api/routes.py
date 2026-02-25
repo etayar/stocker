@@ -1,12 +1,12 @@
-from fastapi import APIRouter
 from pydantic import BaseModel
+from fastapi import APIRouter, Depends
+from app.config import get_settings
 
 router = APIRouter()
 
 @router.get("/health")
-def health():
-    return {"status": "ok", "service": "stocker"}
-
+def health(settings = Depends(get_settings)):
+    return {"status": "ok", "service": settings.app.get("name", "stocker")}
 
 class OrchestrateRequest(BaseModel):
     prompt: str
