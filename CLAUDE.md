@@ -22,7 +22,6 @@ Time series (TS, stocks prices over time) + LLM sentiment (LMMS) + textual analy
 - Modular pipeline components
 - Configurable variables by yaml + env overwriting 
 
-
 ## Scoring & Compounding
 Each component - TS, LLMS or TA will eventually provide a quantity score between 0 and 1 which is how likely should 
 I buy or sell in the period defined by the user when queried the system. 
@@ -36,6 +35,31 @@ Compound a formula - f:[ts_score, llms_score, ta_score] -> [0, 1] s.t:
 - Stock prices: Yahoo Finance (yfinance) / Alpha Vantage / Polygon.io
 - News/text: NewsAPI / Finnhub / Reddit (PRAW)
 - Sentiment model: FinBERT (preferred over generic BERT for finance)
+
+## Agentic Layer
+
+A natural language agent sits in front of the pipeline and translates 
+human prompts into structured query parameters.
+
+**Example:**
+- Input: "Should I buy Tesla for the next 2 weeks?"
+- Output: `{ "ticker": "TSLA", "horizon": 14, "granularity": "daily" }`
+
+### Agent Responsibilities
+- Extract ticker from company name or symbol
+- Infer prediction horizon from natural language ("next week" → 7)
+- Validate and normalize parameters
+- Pass structured params to the pipeline runner
+- Return human-readable explanation of the signal score
+
+### Stack Addition
+- LLM: Claude API (via anthropic SDK) for parameter extraction
+- New module: `api/agent.py`
+- New route: `POST /ask` (accepts free-text, returns signal + explanation)
+
+### Flow
+User prompt → agent.py → structured params → pipeline/runner.py → scores → 
+scorer.py → signal → agent formats human-readable response → user
 
 ## MVP Scope (be explicit!)
 - Single stock at a time

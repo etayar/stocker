@@ -1,21 +1,167 @@
 """
 tests.test_api.test_signal
 
-Tests for api.routes.signal using FastAPI TestClient (httpx).
+Tests for api.routes.signal using FastAPI's TestClient (httpx).
 
-Test cases to implement:
-  - test_get_signal_returns_200
-      GET /signal?ticker=AAPL returns HTTP 200.
-  - test_get_signal_response_schema
-      Response JSON matches SignalResponse schema.
-  - test_get_signal_custom_horizon
-      GET /signal?ticker=AAPL&horizon=10 returns horizon=10 in response.
-  - test_get_signal_missing_ticker_returns_422
-      GET /signal (no ticker) returns HTTP 422 Unprocessable Entity.
-  - test_get_signal_invalid_ticker_returns_error
-      GET /signal?ticker=XXXXXXXXX returns an error response.
-  - test_get_scores_returns_list
-      GET /scores/AAPL returns a list of historical score records.
-  - test_health_check
-      GET /health returns HTTP 200 and {"status": "ok"}.
+run_pipeline is patched at api.routes.signal.run_pipeline so no real data
+fetching, ML inference, or database access occurs.
 """
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+from fastapi.testclient import TestClient
+
+from api.main import app
+
+# ── Shared mock data ──────────────────────────────────────────────────────────
+
+_MOCK_RESULT = {
+    "ticker":         "AAPL",
+    "run_date":       "2026-02-27",
+    "horizon":        5,
+    "ts_score":       0.70,
+    "llms_score":     0.60,
+    "ta_score":       0.80,
+    "compound_score": round((0.70 * 0.60 * 0.80) ** (1 / 3), 6),
+    "signal":         "BUY",
+}
+
+_SIGNAL_FIELDS = {
+    "ticker", "run_date", "horizon",
+    "ts_score", "llms_score", "ta_score",
+    "compound_score", "signal",
+}
+
+# ── Client fixture ────────────────────────────────────────────────────────────
+
+@pytest.fixture(scope="module")
+def client():
+    """Single TestClient per module — lifespan runs once."""
+    with TestClient(app) as c:
+        yield c
+
+
+# ── /health ───────────────────────────────────────────────────────────────────
+
+def test_health_check(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+# ── GET /signal ───────────────────────────────────────────────────────────────
+
+def test_get_signal_returns_200(client):
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT):
+        response = client.get("/signal?ticker=AAPL")
+    assert response.status_code == 200
+
+
+def test_get_signal_response_schema(client):
+    """Response JSON must contain all SignalResponse fields with correct types."""
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT):
+        response = client.get("/signal?ticker=AAPL")
+
+    data = response.json()
+    assert _SIGNAL_FIELDS == set(data.keys())
+
+    # Type checks
+    assert isinstance(data["ticker"], str)
+    assert isinstance(data["run_date"], str)
+    assert isinstance(data["horizon"], int)
+    for score_key in ("ts_score", "llms_score", "ta_score", "compound_score"):
+        assert 0.0 <= data[score_key] <= 1.0, f"{score_key} out of range"
+    assert data["signal"] in {"BUY", "SELL", "HOLD"}
+
+
+def test_get_signal_custom_horizon(client):
+    mock = {**_MOCK_RESULT, "horizon": 10}
+    with patch("api.routes.signal.run_pipeline", return_value=mock):
+        response = client.get("/signal?ticker=AAPL&horizon=10")
+    assert response.status_code == 200
+    assert response.json()["horizon"] == 10
+
+
+def test_get_signal_ticker_in_response(client):
+    mock = {**_MOCK_RESULT, "ticker": "TSLA"}
+    with patch("api.routes.signal.run_pipeline", return_value=mock):
+        response = client.get("/signal?ticker=TSLA")
+    assert response.json()["ticker"] == "TSLA"
+
+
+def test_get_signal_missing_ticker_returns_422(client):
+    """ticker is required — omitting it must yield 422 Unprocessable Entity."""
+    response = client.get("/signal")
+    assert response.status_code == 422
+
+
+def test_get_signal_horizon_zero_returns_422(client):
+    """horizon must be >= 1."""
+    response = client.get("/signal?ticker=AAPL&horizon=0")
+    assert response.status_code == 422
+
+
+def test_get_signal_invalid_ticker_returns_error(client):
+    """run_pipeline raising ValueError → 400 error response."""
+    with patch(
+        "api.routes.signal.run_pipeline",
+        side_effect=ValueError("Unknown ticker: XXXXXXXXX"),
+    ):
+        response = client.get("/signal?ticker=XXXXXXXXX")
+    assert response.status_code == 400
+    assert "XXXXXXXXX" in response.json()["detail"]
+
+
+def test_get_signal_pipeline_exception_returns_500(client):
+    """Unexpected pipeline failure → 500 error response."""
+    with patch(
+        "api.routes.signal.run_pipeline",
+        side_effect=RuntimeError("data source unavailable"),
+    ):
+        response = client.get("/signal?ticker=AAPL")
+    assert response.status_code == 500
+
+
+def test_get_signal_passes_horizon_to_pipeline(client):
+    """The horizon query param must reach run_pipeline as an int."""
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT) as mock_rp:
+        client.get("/signal?ticker=AAPL&horizon=7")
+    _, call_kwargs = mock_rp.call_args
+    args = mock_rp.call_args[0]
+    # run_pipeline(ticker, horizon, config) — positional
+    assert args[1] == 7
+
+
+def test_get_signal_passes_ticker_to_pipeline(client):
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT) as mock_rp:
+        client.get("/signal?ticker=NVDA")
+    assert mock_rp.call_args[0][0] == "NVDA"
+
+
+# ── GET /scores/{ticker} ──────────────────────────────────────────────────────
+
+def test_get_scores_returns_list(client):
+    response = client.get("/scores/AAPL")
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_get_scores_empty_until_db_implemented(client):
+    """DB not yet wired up — endpoint always returns []."""
+    response = client.get("/scores/TSLA")
+    assert response.json() == []
+
+
+def test_get_scores_custom_limit_accepted(client):
+    """limit query param should be accepted without error."""
+    response = client.get("/scores/AAPL?limit=10")
+    assert response.status_code == 200
+
+
+def test_get_scores_limit_zero_returns_422(client):
+    """limit must be >= 1."""
+    response = client.get("/scores/AAPL?limit=0")
+    assert response.status_code == 422

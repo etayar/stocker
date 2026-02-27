@@ -19,3 +19,60 @@ Endpoints:
 
 All heavy computation is delegated to pipeline.runner.run_pipeline().
 """
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from api.schemas import HistoricalScoreRecord, SignalResponse
+from pipeline.runner import run_pipeline
+
+router = APIRouter()
+
+
+@router.get("/signal", response_model=SignalResponse)
+async def get_signal(
+    request: Request,
+    ticker: str = Query(
+        ...,
+        description="Stock ticker symbol (e.g. AAPL)",
+        min_length=1,
+        max_length=10,
+    ),
+    horizon: int = Query(
+        5,
+        description="Prediction horizon in days",
+        ge=1,
+        le=365,
+    ),
+) -> dict:
+    """Run the full pipeline for *ticker* and return the compound signal.
+
+    Raises 400 for invalid input (e.g. unknown ticker).
+    Raises 500 for unexpected pipeline failures.
+    """
+    try:
+        config = request.app.state.config
+        result = run_pipeline(ticker, horizon, config)
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get(
+    "/scores/{ticker}",
+    response_model=list[HistoricalScoreRecord],
+)
+async def get_scores(
+    ticker: str,
+    limit: int = Query(30, description="Max records to return", ge=1, le=500),
+) -> list:
+    """Return historical pipeline results for *ticker*.
+
+    The database persistence layer is not yet implemented; this endpoint
+    always returns an empty list until it is wired up.
+    """
+    # TODO: query data.storage.db once the persistence layer is implemented.
+    return []

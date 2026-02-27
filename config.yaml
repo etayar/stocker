@@ -32,6 +32,11 @@ scoring:
   buy_threshold: 0.65          # Score above this -> BUY signal
   sell_threshold: 0.35         # Score below this -> SELL signal
 
+agent:
+  model: "claude-sonnet-4-6"   # Anthropic model for param extraction + explanation
+  max_tokens_parse: 256         # Token budget for structured extraction
+  max_tokens_explain: 512       # Token budget for human-readable explanation
+
 api:
   host: "0.0.0.0"
   port: 8000
