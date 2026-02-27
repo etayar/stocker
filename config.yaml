@@ -1,23 +1,45 @@
-app:
-  name: stocker
-  host: 0.0.0.0
+stock:
+  ticker: "AAPL"               # Override via env: STOCK_TICKER
+  start_date: "2020-01-01"     # Historical data start
+  end_date: "2024-01-01"       # Historical data end
+  prediction_horizon: 5        # Days ahead to signal (user configurable)
+
+data:
+  price_source: "yfinance"     # yfinance | alpha_vantage | polygon
+  news_source: "newsapi"       # newsapi | finnhub | reddit
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+
+model:
+  ts:
+    window_size: 30            # Lookback window in days
+    model_type: "lstm"         # lstm | arima | xgboost
+  sentiment:
+    model_name: "ProsusAI/finbert"
+    max_length: 512
+    batch_size: 16
+  ta:
+    rsi_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bb_period: 20              # Bollinger Bands period
+    bb_std: 2.0
+
+scoring:
+  # Geometric mean: f(ts, llms, ta) = (ts * llms * ta)^(1/3)
+  components: ["ts", "llms", "ta"]
+  buy_threshold: 0.65          # Score above this -> BUY signal
+  sell_threshold: 0.35         # Score below this -> SELL signal
+
+api:
+  host: "0.0.0.0"
   port: 8000
   debug: false
-  log_level: info
 
-fetch:
-  source: google_news_rss
-  days: 7
-  max_items: 20
-  hl: en-US
-  gl: US
-  ceid: US:en
-
-sentiment:
-  model: heuristic   # later: "vader"
-  positive_threshold: 0.05
-  negative_threshold: -0.05
-
-orchestrator:
-  # used by extract_ticker_query to create the search query
-  ticker_query_template: '({ticker}) stock OR earnings OR shares'
+database:
+  host: "localhost"
+  port: 5432
+  name: "stocker"
+  user: "stocker_user"
+  # password: set via DATABASE_URL env var

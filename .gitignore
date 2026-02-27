@@ -1,4 +1,27 @@
+# Environment
+.env
+.venv/
+venv/
 __pycache__/
 *.pyc
-.venv/
+*.pyo
+
+# Data / artefacts
+data/raw/
+data/processed/
+*.pt
+*.pkl
+*.joblib
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
 .DS_Store
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
