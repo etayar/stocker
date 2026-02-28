@@ -126,6 +126,44 @@ scorer.py → signal → agent formats human-readable response → user
 - Prediction horizon: next N days (user configurable)
 - No live trading — signal only
 
+## Security Rules — Non-Negotiable
+
+### Secrets & Credentials
+- NEVER hardcode API keys, tokens, or passwords anywhere in code
+- All secrets via environment variables only (.env file, never committed)
+- .env must be in .gitignore — verify this exists before first commit
+- Use python-dotenv to load env vars; document all required vars in .env.example
+
+### Input Validation
+- ALL external inputs must be validated before use (API requests, user prompts, ticker symbols)
+- Validate ticker symbols against an allowlist or known format before passing to yfinance or any model
+- Never pass raw user text directly to a shell command or file path
+
+### API Security (FastAPI)
+- Every endpoint must have input validation via Pydantic models
+- Add rate limiting to all public endpoints (use slowapi)
+- Never expose internal error details or stack traces to API responses
+- Log errors server-side, return generic messages to the caller
+
+### Database (PostgreSQL)
+- Always use parameterized queries — never string-format SQL
+- DB credentials only via environment variables
+- No sensitive financial data logged in plaintext
+
+### Dependencies
+- Pin all dependency versions in requirements.txt
+- Run `bandit -r .` (security linter) before any production deployment
+- Run `pip audit` periodically to check for known vulnerabilities in packages
+
+### File System
+- Model cache paths must be constructed from validated ticker symbols only
+- Never allow user input to directly construct a file path
+
+### After Every Major Feature
+- Run bandit and fix any HIGH or MEDIUM severity findings before moving on
+- Review: does any new endpoint accept user input? If yes, is it validated?
+
+
 ## What NOT to do
 - No monolithic scripts
 - No Jupyter notebooks in production code

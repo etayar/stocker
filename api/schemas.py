@@ -30,9 +30,13 @@ Models:
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Allowlist: 1-10 uppercase letters, digits, or dots (e.g. "BRK.B")
+_TICKER_RE = re.compile(r"^[A-Z0-9.]{1,10}$")
 
 
 class ComponentScores(BaseModel):
@@ -82,6 +86,17 @@ class QueryParams(BaseModel):
     ticker:      str
     horizon:     int = Field(ge=1, le=365)
     granularity: str = "daily"
+
+    @field_validator("ticker")
+    @classmethod
+    def validate_ticker_format(cls, v: str) -> str:
+        v = v.upper().strip()
+        if not _TICKER_RE.match(v):
+            raise ValueError(
+                f"Invalid ticker '{v}'. "
+                "Must be 1-10 uppercase letters, digits, or dots (e.g. 'AAPL', 'BRK.B')."
+            )
+        return v
 
 
 class AskResponse(SignalResponse):

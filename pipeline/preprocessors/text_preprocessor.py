@@ -26,20 +26,36 @@ Public interface:
 from __future__ import annotations
 
 import re
+from html.parser import HTMLParser
 from typing import Any
 
 
 # ── HTML stripping ─────────────────────────────────────────────────────────────
 
-_TAG_RE       = re.compile(r"<[^>]+>")
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Collect visible text nodes; discard all tags and attributes."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:  # noqa: D102
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return " ".join(self._parts)
+
+
 def _strip_html(text: str) -> str:
-    """Remove HTML tags and normalise whitespace."""
-    text = _TAG_RE.sub(" ", text)
-    text = _WHITESPACE_RE.sub(" ", text)
-    return text.strip()
+    """Remove HTML tags (via stdlib html.parser) and normalise whitespace."""
+    extractor = _HTMLTextExtractor()
+    extractor.feed(text)
+    cleaned = extractor.get_text()
+    cleaned = _WHITESPACE_RE.sub(" ", cleaned)
+    return cleaned.strip()
 
 
 # ── Ticker alias lookup ────────────────────────────────────────────────────────

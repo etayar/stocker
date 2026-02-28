@@ -22,12 +22,18 @@ All heavy computation is delegated to pipeline.runner.run_pipeline().
 
 from __future__ import annotations
 
+import logging
+import re
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api.schemas import HistoricalScoreRecord, SignalResponse
 from pipeline.runner import run_pipeline
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TICKER_RE = re.compile(r"^[A-Z0-9.]{1,10}$")
 
 
 @router.get("/signal", response_model=SignalResponse)
@@ -51,14 +57,24 @@ async def get_signal(
     Raises 400 for invalid input (e.g. unknown ticker).
     Raises 500 for unexpected pipeline failures.
     """
+    ticker_up = ticker.upper().strip()
+    if not _TICKER_RE.match(ticker_up):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid ticker format. Must be 1-10 uppercase letters, digits, or dots.",
+        )
+
     try:
         config = request.app.state.config
-        result = run_pipeline(ticker, horizon, config)
+        result = run_pipeline(ticker_up, horizon, config)
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Pipeline error ticker=%s horizon=%d: %s", ticker_up, horizon, exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="An internal error occurred. Please try again later."
+        ) from exc
 
 
 @router.get(

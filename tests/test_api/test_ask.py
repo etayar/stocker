@@ -220,6 +220,28 @@ def test_ask_returns_500_on_pipeline_error(client):
     assert response.status_code == 500
 
 
+def test_ask_500_does_not_leak_exception_detail(client):
+    """500 responses must NOT expose internal error messages to the caller."""
+    with patch("api.routes.ask.parse_query", return_value=_MOCK_QUERY), \
+         patch(
+             "api.routes.ask.run_pipeline",
+             side_effect=RuntimeError("super secret DB connection string"),
+         ):
+        response = client.post("/ask", json={"prompt": _PROMPT})
+    assert "super secret DB connection string" not in response.json().get("detail", "")
+
+
+def test_ask_502_does_not_leak_exception_detail(client):
+    """502 responses from agent errors must NOT expose internal error messages."""
+    with patch(
+        "api.routes.ask.parse_query",
+        side_effect=RuntimeError("internal API key: sk-1234"),
+    ):
+        response = client.post("/ask", json={"prompt": _PROMPT})
+    assert response.status_code == 502
+    assert "sk-1234" not in response.json().get("detail", "")
+
+
 def test_ask_returns_400_on_pipeline_value_error(client):
     with patch("api.routes.ask.parse_query", return_value=_MOCK_QUERY), \
          patch(

@@ -12,7 +12,11 @@ Flow:
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 from api.agent import explain_signal, parse_query
 from api.schemas import AskRequest, AskResponse, QueryParams
@@ -47,8 +51,9 @@ async def ask(request: Request, body: AskRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        logger.error("Agent parse failed: %s", exc, exc_info=True)
         raise HTTPException(
-            status_code=502, detail=f"Agent parse error: {exc}"
+            status_code=502, detail="Agent unavailable. Please try again later."
         ) from exc
 
     # ── 2. Run pipeline ───────────────────────────────────────────────────────
@@ -57,7 +62,10 @@ async def ask(request: Request, body: AskRequest) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        logger.error("Pipeline error in /ask ticker=%s: %s", query_params.ticker, exc, exc_info=True)
+        raise HTTPException(
+            status_code=500, detail="An internal error occurred. Please try again later."
+        ) from exc
 
     # ── 3. Generate explanation (non-fatal — fallback on failure) ─────────────
     try:

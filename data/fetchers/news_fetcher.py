@@ -23,8 +23,26 @@ Every article dict has these keys:
 
 from __future__ import annotations
 
+import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as _FutureTimeout
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
+
+# Hard cap: how long (seconds) we wait for any single external API call.
+_REQUEST_TIMEOUT: int = 30
+
+
+def _call_with_timeout(fn, *args, **kwargs):
+    """Run *fn(*args, **kwargs)* in a thread; return None if it exceeds _REQUEST_TIMEOUT."""
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=_REQUEST_TIMEOUT)
+        except _FutureTimeout:
+            logger.warning("External API call timed out after %ds: %s", _REQUEST_TIMEOUT, fn)
+            return None
 
 # ── Optional library imports (guarded so the module loads without them) ────────
 # Tests patch these at module level: data.fetchers.news_fetcher.NewsApiClient etc.
@@ -76,7 +94,8 @@ def _fetch_newsapi(ticker: str, lookback_days: int) -> list[dict]:
     from_date, to_date = _lookback_dates(lookback_days)
 
     client   = NewsApiClient(api_key=api_key)
-    response = client.get_everything(
+    response = _call_with_timeout(
+        client.get_everything,
         q=ticker,
         from_param=from_date,
         to=to_date,
@@ -84,6 +103,8 @@ def _fetch_newsapi(ticker: str, lookback_days: int) -> list[dict]:
         sort_by="publishedAt",
         page_size=100,
     )
+    if response is None:
+        return []
 
     articles = []
     for item in response.get("articles", []):
@@ -106,7 +127,9 @@ def _fetch_finnhub(ticker: str, lookback_days: int) -> list[dict]:
     from_date, to_date = _lookback_dates(lookback_days)
 
     client = finnhub.Client(api_key=api_key)
-    items  = client.company_news(ticker.upper(), _from=from_date, to=to_date)
+    items  = _call_with_timeout(client.company_news, ticker.upper(), _from=from_date, to=to_date)
+    if items is None:
+        return []
 
     articles = []
     for item in (items or []):
@@ -143,20 +166,28 @@ def _fetch_reddit(ticker: str, lookback_days: int) -> list[dict]:
     subreddits = ["stocks", "investing", "wallstreetbets"]
     query      = ticker.upper()
 
-    articles = []
-    for sub_name in subreddits:
-        subreddit = reddit.subreddit(sub_name)
-        for post in subreddit.search(query, sort="new", time_filter="month", limit=50):
+    def _fetch_sub(sub_name: str) -> list:
+        sub   = reddit.subreddit(sub_name)
+        posts = list(sub.search(query, sort="new", time_filter="month", limit=50))
+        results = []
+        for post in posts:
             created = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
             if created < cutoff:
                 continue
-            articles.append({
+            results.append({
                 "title":        post.title or "",
                 "body":         post.selftext or "",
                 "published_at": created.isoformat(),
                 "source":       "reddit",
                 "url":          f"https://reddit.com{post.permalink}",
             })
+        return results
+
+    articles = []
+    for sub_name in subreddits:
+        batch = _call_with_timeout(_fetch_sub, sub_name)
+        if batch is not None:
+            articles.extend(batch)
     return articles
 
 

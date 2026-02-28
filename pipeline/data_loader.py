@@ -21,8 +21,9 @@ Public interface:
 from __future__ import annotations
 
 import pathlib
-import pickle
 from typing import List, Tuple
+
+import joblib
 
 import pandas as pd
 import yfinance as yf
@@ -168,7 +169,7 @@ def apply_scaler(df: pd.DataFrame, scaler: MinMaxScaler) -> pd.DataFrame:
 
 
 def save_scaler(scaler: MinMaxScaler, path: str) -> None:
-    """Persist *scaler* to disk via pickle.
+    """Persist *scaler* to disk via joblib.
 
     Parent directories are created automatically.
 
@@ -179,8 +180,7 @@ def save_scaler(scaler: MinMaxScaler, path: str) -> None:
     """
     dest = pathlib.Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as f:
-        pickle.dump(scaler, f)
+    joblib.dump(scaler, dest)
 
 
 def load_scaler(path: str) -> MinMaxScaler:
@@ -193,6 +193,15 @@ def load_scaler(path: str) -> MinMaxScaler:
     Returns
     -------
     Restored MinMaxScaler instance.
+
+    Raises
+    ------
+    TypeError : If the loaded object is not a MinMaxScaler (tampered file guard).
     """
-    with pathlib.Path(path).open("rb") as f:
-        return pickle.load(f)
+    scaler = joblib.load(pathlib.Path(path))
+    if not isinstance(scaler, MinMaxScaler):
+        raise TypeError(
+            f"Expected MinMaxScaler from {path!r}, got {type(scaler).__name__}. "
+            "The file may be corrupted or tampered with."
+        )
+    return scaler

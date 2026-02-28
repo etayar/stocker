@@ -225,3 +225,48 @@ def test_fetch_news_lookback_days_passed_to_backend(monkeypatch):
     _, kwargs = mock_client.get_everything.call_args
     # from_param should be 7 days ago — just verify it was passed
     assert "from_param" in kwargs
+
+
+# ── Timeout behaviour ──────────────────────────────────────────────────────────
+
+def test_newsapi_timeout_returns_empty_list(monkeypatch):
+    """If the newsapi call times out, fetch_news must return [] instead of hanging."""
+    monkeypatch.setenv("NEWSAPI_KEY", "test-key")
+    mock_client = MagicMock()
+    with patch("data.fetchers.news_fetcher.NewsApiClient", return_value=mock_client), \
+         patch("data.fetchers.news_fetcher._call_with_timeout", return_value=None):
+        result = fetch_news("AAPL", "newsapi")
+    assert result == []
+
+
+def test_finnhub_timeout_returns_empty_list(monkeypatch):
+    monkeypatch.setenv("FINNHUB_API_KEY", "test-key")
+    with patch("data.fetchers.news_fetcher.finnhub") as mock_module, \
+         patch("data.fetchers.news_fetcher._call_with_timeout", return_value=None):
+        mock_module.Client.return_value = MagicMock()
+        result = fetch_news("AAPL", "finnhub")
+    assert result == []
+
+
+def test_reddit_timeout_on_subreddit_skips_it(monkeypatch):
+    """A timed-out subreddit must be skipped; others still contribute articles."""
+    monkeypatch.setenv("REDDIT_CLIENT_ID",     "cid")
+    monkeypatch.setenv("REDDIT_CLIENT_SECRET", "csec")
+    monkeypatch.setenv("REDDIT_USER_AGENT",    "stocker/1.0")
+
+    mock_reddit = MagicMock()
+    mock_praw_module = MagicMock()
+    mock_praw_module.Reddit.return_value = mock_reddit
+
+    # First subreddit times out (None); the other two each return 1 article.
+    one_article = [{"title": "p", "body": "", "published_at": "2026-02-01T10:00:00+00:00",
+                    "source": "reddit", "url": "https://reddit.com/r/x"}]
+    call_results = iter([None, one_article, one_article])
+
+    with patch("data.fetchers.news_fetcher.praw", mock_praw_module), \
+         patch("data.fetchers.news_fetcher._call_with_timeout",
+               side_effect=lambda fn, *a, **kw: next(call_results)):
+        result = fetch_news("AAPL", "reddit")
+
+    # 2 subreddits returned 1 article each; 1 timed out → total 2
+    assert len(result) == 2

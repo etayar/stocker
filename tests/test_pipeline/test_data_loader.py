@@ -234,3 +234,15 @@ def test_save_scaler_creates_parent_dirs(tmp_path):
     path = str(tmp_path / "a" / "b" / "scaler.pkl")
     save_scaler(scaler, path)
     assert pathlib.Path(path).exists()
+
+
+def test_load_scaler_raises_type_error_on_wrong_object(tmp_path):
+    """load_scaler must reject files that don't contain a MinMaxScaler."""
+    import joblib
+
+    # Save something that is NOT a MinMaxScaler to a file
+    bad_path = tmp_path / "bad_scaler.pkl"
+    joblib.dump({"not": "a scaler"}, bad_path)
+
+    with pytest.raises(TypeError, match="MinMaxScaler"):
+        load_scaler(str(bad_path))

@@ -24,7 +24,10 @@ import json
 import logging
 import math
 import pathlib
+import re
 from datetime import datetime, timezone
+
+_TICKER_RE = re.compile(r"^[A-Z0-9.]{1,10}$")
 
 import numpy as np
 
@@ -333,21 +336,27 @@ def get_ticker_model(ticker: str, config: dict) -> "ChronosPipeline":
     Fine-tuned ChronosPipeline ready for inference.
     """
     _require_chronos()
+    ticker_up = ticker.upper().strip()
+    if not _TICKER_RE.match(ticker_up):
+        raise ValueError(
+            f"Invalid ticker '{ticker}'. "
+            "Must be 1-10 uppercase letters, digits, or dots."
+        )
     ts_cfg     = config["model"]["ts"]
     wf_cfg     = config["data"]["walk_forward"]
     ttl        = int(ts_cfg.get("cache_ttl_days", 7))
-    cache_dir  = pathlib.Path(ts_cfg["cache_dir"]) / ticker.upper()
+    cache_dir  = pathlib.Path(ts_cfg["cache_dir"]) / ticker_up
     general_dir = pathlib.Path(ts_cfg["general_model_dir"])
 
     # ── 1. Cache hit ──────────────────────────────────────────────────────────
     if _is_fresh(cache_dir, ttl):
-        logger.info("get_ticker_model: cache hit for %s (< %d days old)", ticker, ttl)
+        logger.info("get_ticker_model: cache hit for %s (< %d days old)", ticker_up, ttl)
         return _load_pipeline(cache_dir, config)
 
-    logger.info("get_ticker_model: rebuilding model for %s …", ticker)
+    logger.info("get_ticker_model: rebuilding model for %s …", ticker_up)
 
     # ── 2. Fetch price history ────────────────────────────────────────────────
-    df = fetch_ticker(ticker, config)
+    df = fetch_ticker(ticker_up, config)
 
     # ── 3. Build walk-forward folds ───────────────────────────────────────────
     train_w = int(wf_cfg["train_window_days"])
@@ -357,7 +366,7 @@ def get_ticker_model(ticker: str, config: dict) -> "ChronosPipeline":
 
     if not folds:
         raise ValueError(
-            f"Not enough price history for '{ticker}' to build any walk-forward fold "
+            f"Not enough price history for '{ticker_up}' to build any walk-forward fold "
             f"(need at least {train_w + val_w} rows, got {len(df)})."
         )
 
@@ -378,7 +387,7 @@ def get_ticker_model(ticker: str, config: dict) -> "ChronosPipeline":
     save_scaler(scaler, str(_scaler_path(cache_dir)))
 
     meta = {
-        "ticker":        ticker.upper(),
+        "ticker":        ticker_up,
         "fine_tuned_at": datetime.now(timezone.utc).isoformat(),
         "data_until":    str(df.index[-1].date()),
     }
@@ -415,11 +424,11 @@ def predict(ticker: str, horizon: int, config: dict) -> float:
     _require_chronos()
     ts_cfg = config["model"]["ts"]
 
-    # ── 1. Get fine-tuned model ───────────────────────────────────────────────
+    # ── 1. Get fine-tuned model (validates ticker format internally) ──────────
     pipeline = get_ticker_model(ticker, config)
 
     # ── 2. Fetch recent price history for context ─────────────────────────────
-    df = fetch_ticker(ticker, config)
+    df = fetch_ticker(ticker.upper().strip(), config)
     close = df["close"].values.astype(float)
 
     if len(close) < 2:

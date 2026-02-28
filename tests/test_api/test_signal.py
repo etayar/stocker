@@ -125,6 +125,43 @@ def test_get_signal_pipeline_exception_returns_500(client):
     assert response.status_code == 500
 
 
+def test_get_signal_500_does_not_leak_exception_detail(client):
+    """500 responses must NOT expose internal error messages to the caller."""
+    with patch(
+        "api.routes.signal.run_pipeline",
+        side_effect=RuntimeError("super secret internal error"),
+    ):
+        response = client.get("/signal?ticker=AAPL")
+    assert "super secret internal error" not in response.json().get("detail", "")
+
+
+# ── Security: ticker format validation (path traversal prevention) ─────────────
+
+def test_get_signal_path_traversal_ticker_returns_400(client):
+    """A ticker with path-traversal chars must be rejected (9 chars, passes length check)."""
+    response = client.get("/signal?ticker=../../etc")  # 9 chars, invalid chars
+    assert response.status_code == 400
+
+
+def test_get_signal_special_chars_in_ticker_returns_400(client):
+    """Shell metacharacters in ticker must be rejected."""
+    response = client.get("/signal?ticker=AAPL%3Bx")  # "AAPL;x" URL-encoded
+    assert response.status_code == 400
+
+
+def test_get_signal_ticker_too_long_returns_422(client):
+    """Tickers longer than 10 characters return 422 from FastAPI Query validation."""
+    response = client.get("/signal?ticker=TOOLONGTICKER")
+    assert response.status_code == 422
+
+
+def test_get_signal_lowercase_ticker_is_normalised(client):
+    """Lowercase ticker must be uppercased and accepted."""
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT):
+        response = client.get("/signal?ticker=aapl")
+    assert response.status_code == 200
+
+
 def test_get_signal_passes_horizon_to_pipeline(client):
     """The horizon query param must reach run_pipeline as an int."""
     with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT) as mock_rp:
