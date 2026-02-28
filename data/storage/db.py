@@ -18,6 +18,8 @@ Public interface:
   init_db(engine: Engine) -> None
   save_score(result: dict, session: Session) -> ScoreRecord
   get_scores(ticker: str, limit: int, session: Session) -> list[ScoreRecord]
+  save_prices(df, ticker: str, session: Session) -> int
+  save_news(articles: list[dict], ticker: str, session: Session) -> int
 """
 
 from __future__ import annotations
@@ -31,7 +33,6 @@ from typing import Generator
 from sqlalchemy import (
     DateTime,
     Float,
-    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -238,3 +239,101 @@ def get_scores(ticker: str, limit: int, session: Session) -> list[ScoreRecord]:
         .limit(limit)
     )
     return list(session.scalars(stmt).all())
+
+
+def save_prices(df, ticker: str, session: Session) -> int:
+    """Upsert daily OHLCV rows from *df* into the prices table.
+
+    Fetches all existing rows for *ticker* in one query, then updates or
+    inserts each row from the DataFrame.  NaN values for optional columns
+    (open, high, low, volume) are stored as NULL.
+
+    Args:
+        df:      pandas DataFrame with DatetimeIndex and columns including
+                 ``close`` (required) plus any of ``open, high, low, volume``.
+        ticker:  Stock symbol (e.g. "AAPL").
+        session: An open SQLAlchemy Session.
+
+    Returns:
+        Number of rows processed.
+    """
+    import math  # noqa: PLC0415
+
+    # Load all existing dates for this ticker into a dict for O(1) lookup.
+    existing: dict[str, PriceRecord] = {
+        r.date: r
+        for r in session.scalars(
+            select(PriceRecord).where(PriceRecord.ticker == ticker)
+        ).all()
+    }
+
+    def _float(val) -> float | None:
+        try:
+            f = float(val)
+            return None if math.isnan(f) else f
+        except (TypeError, ValueError):
+            return None
+
+    count = 0
+    for ts, row in df.iterrows():
+        date_str = ts.date().isoformat()
+        record   = existing.get(date_str)
+        if record is None:
+            record = PriceRecord(ticker=ticker, date=date_str)
+            session.add(record)
+            existing[date_str] = record
+
+        record.close  = _float(row.get("close"))
+        record.open   = _float(row.get("open"))
+        record.high   = _float(row.get("high"))
+        record.low    = _float(row.get("low"))
+        record.volume = _float(row.get("volume"))
+        count += 1
+
+    session.flush()
+    return count
+
+
+def save_news(articles: list[dict], ticker: str, session: Session) -> int:
+    """Upsert news articles into the news table.
+
+    Deduplicates by (ticker, published_at, url).  Articles without a URL
+    are keyed only on (ticker, published_at) and may not deduplicate
+    correctly if the same article appears multiple times.
+
+    Args:
+        articles: List of article dicts with keys ``title``, ``body``,
+                  ``published_at``, ``source``, ``url``.
+        ticker:   Stock symbol (e.g. "AAPL").
+        session:  An open SQLAlchemy Session.
+
+    Returns:
+        Number of articles processed.
+    """
+    # Load existing records for this ticker into a dict for O(1) lookup.
+    existing: dict[tuple[str, str], NewsRecord] = {
+        (r.published_at, r.url): r
+        for r in session.scalars(
+            select(NewsRecord).where(NewsRecord.ticker == ticker)
+        ).all()
+    }
+
+    count = 0
+    for article in articles:
+        pub = (article.get("published_at") or "").strip()
+        url = (article.get("url") or "").strip()
+        key = (pub, url)
+
+        record = existing.get(key)
+        if record is None:
+            record = NewsRecord(ticker=ticker, published_at=pub, url=url)
+            session.add(record)
+            existing[key] = record
+
+        record.title  = (article.get("title")  or "")[:512]
+        record.body   = article.get("body")   or ""
+        record.source = (article.get("source") or "")[:64]
+        count += 1
+
+    session.flush()
+    return count

@@ -273,3 +273,82 @@ def test_load_config_no_env_vars_gives_yaml_defaults(monkeypatch):
     config = load_config(_CONFIG_PATH)
     assert config["stock"]["ticker"] == "AAPL"
     assert config["data"]["price_source"] == "yfinance"
+
+
+# ── DB persistence in run_pipeline ────────────────────────────────────────────
+
+class TestRunPipelineDbPersistence:
+    """run_pipeline(db_engine=...) must persist prices + news; db_engine=None skips it."""
+
+    def test_no_persistence_when_db_engine_is_none(self, pipeline_mocks):
+        """Default call (no db_engine) must not call save_prices or save_news."""
+        with patch("pipeline.runner.save_prices") as mock_sp, \
+             patch("pipeline.runner.save_news") as mock_sn:
+            run_pipeline("AAPL", 5, _CONFIG)
+        mock_sp.assert_not_called()
+        mock_sn.assert_not_called()
+
+    def test_save_prices_called_with_db_engine(self, pipeline_mocks):
+        mock_engine = MagicMock()
+        with patch("pipeline.runner.save_prices") as mock_sp, \
+             patch("pipeline.runner.save_news"), \
+             patch("pipeline.runner.get_session"):
+            run_pipeline("AAPL", 5, _CONFIG, db_engine=mock_engine)
+        mock_sp.assert_called_once()
+
+    def test_save_news_called_with_db_engine(self, pipeline_mocks):
+        mock_engine = MagicMock()
+        with patch("pipeline.runner.save_prices"), \
+             patch("pipeline.runner.save_news") as mock_sn, \
+             patch("pipeline.runner.get_session"):
+            run_pipeline("AAPL", 5, _CONFIG, db_engine=mock_engine)
+        mock_sn.assert_called_once()
+
+    def test_save_prices_receives_correct_ticker(self, pipeline_mocks):
+        mock_engine = MagicMock()
+        with patch("pipeline.runner.save_prices") as mock_sp, \
+             patch("pipeline.runner.save_news"), \
+             patch("pipeline.runner.get_session"):
+            run_pipeline("TSLA", 5, _CONFIG, db_engine=mock_engine)
+        # second positional arg to save_prices is ticker
+        assert mock_sp.call_args[0][1] == "TSLA"
+
+    def test_pipeline_result_unchanged_with_db_engine(self, pipeline_mocks):
+        """Persistence must not affect the returned result dict."""
+        mock_engine = MagicMock()
+        with patch("pipeline.runner.save_prices"), \
+             patch("pipeline.runner.save_news"), \
+             patch("pipeline.runner.get_session"):
+            result_with_db = run_pipeline("AAPL", 5, _CONFIG, db_engine=mock_engine)
+        result_without_db = run_pipeline("AAPL", 5, _CONFIG)
+        assert result_with_db.keys() == result_without_db.keys()
+        assert result_with_db["signal"] == result_without_db["signal"]
+
+    def test_prices_db_failure_does_not_raise(self, pipeline_mocks):
+        """A DB error during price persistence must not propagate."""
+        mock_engine = MagicMock()
+        with patch("pipeline.runner.get_session", side_effect=RuntimeError("DB down")):
+            result = run_pipeline("AAPL", 5, _CONFIG, db_engine=mock_engine)
+        assert "signal" in result
+
+    def test_news_db_failure_does_not_raise(self, pipeline_mocks):
+        """A DB error during news persistence must not propagate."""
+        mock_engine = MagicMock()
+        call_count = 0
+
+        def _get_session_side_effect(engine):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:   # second call is for news
+                raise RuntimeError("DB down on news")
+            from contextlib import contextmanager
+            @contextmanager
+            def _ok():
+                yield MagicMock()
+            return _ok()
+
+        with patch("pipeline.runner.get_session", side_effect=_get_session_side_effect), \
+             patch("pipeline.runner.save_prices"), \
+             patch("pipeline.runner.save_news"):
+            result = run_pipeline("AAPL", 5, _CONFIG, db_engine=mock_engine)
+        assert "signal" in result

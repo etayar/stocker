@@ -27,6 +27,7 @@ Public interface:
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -45,6 +46,9 @@ from models.ts_model import predict as ts_predict
 from models.sentiment_model import load_sentiment_model, score_articles
 from models.ta_model import compute_ta_score
 from models.scorer import compound_score, interpret_signal
+from data.storage.db import get_session, save_prices, save_news
+
+logger = logging.getLogger(__name__)
 
 # ── Env-var → config-key mapping ───────────────────────────────────────────────
 _STR_OVERRIDES: dict[str, tuple[str, str]] = {
@@ -88,7 +92,27 @@ def load_config(config_path: str = "config.yaml") -> dict:
     return config
 
 
-def run_pipeline(ticker: str, horizon: int, config: dict) -> dict:
+def _persist_prices(df, ticker: str, db_engine) -> None:
+    """Best-effort: save price rows to DB. Logs but never raises."""
+    try:
+        with get_session(db_engine) as session:
+            n = save_prices(df, ticker, session)
+        logger.debug("Persisted %d price rows for %s", n, ticker)
+    except Exception as exc:
+        logger.warning("Failed to persist prices for %s: %s", ticker, exc)
+
+
+def _persist_news(articles: list, ticker: str, db_engine) -> None:
+    """Best-effort: save news articles to DB. Logs but never raises."""
+    try:
+        with get_session(db_engine) as session:
+            n = save_news(articles, ticker, session)
+        logger.debug("Persisted %d news articles for %s", n, ticker)
+    except Exception as exc:
+        logger.warning("Failed to persist news for %s: %s", ticker, exc)
+
+
+def run_pipeline(ticker: str, horizon: int, config: dict, db_engine=None) -> dict:
     """Execute the full Stocker pipeline for one stock.
 
     Pipeline steps:
@@ -124,9 +148,13 @@ def run_pipeline(ticker: str, horizon: int, config: dict) -> dict:
 
     # ── 1: Fetch prices (real implementation) ─────────────────────────────────
     prices = fetch_ticker(ticker, config)
+    if db_engine is not None:
+        _persist_prices(prices, ticker, db_engine)
 
     # ── 2 & 3: Fetch + preprocess news (stubs — not yet implemented) ──────────
     articles_raw = _news_fetcher.fetch_news(ticker, news_source)
+    if db_engine is not None:
+        _persist_news(articles_raw, ticker, db_engine)
     articles     = _text_preprocessor.preprocess_articles(articles_raw, ticker, config)
 
     # ── 4: TS score (Chronos — fetches its own price data internally) ─────────

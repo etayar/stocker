@@ -67,9 +67,11 @@ async def get_signal(
             detail="Invalid ticker format. Must be 1-10 uppercase letters, digits, or dots.",
         )
 
+    db_engine = getattr(request.app.state, "db_engine", None)
+
     try:
         config = request.app.state.config
-        result = run_pipeline(ticker_up, horizon, config)
+        result = run_pipeline(ticker_up, horizon, config, db_engine=db_engine)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -78,7 +80,6 @@ async def get_signal(
             status_code=500, detail="An internal error occurred. Please try again later."
         ) from exc
 
-    db_engine = getattr(request.app.state, "db_engine", None)
     if db_engine is not None:
         try:
             with get_session(db_engine) as session:

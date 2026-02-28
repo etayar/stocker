@@ -46,7 +46,8 @@ async def ask(request: Request, body: AskRequest) -> dict:
             detail="Agent unavailable: ANTHROPIC_API_KEY is not set.",
         )
 
-    config = request.app.state.config
+    config    = request.app.state.config
+    db_engine = getattr(request.app.state, "db_engine", None)
 
     # ── 1. Parse prompt into structured parameters ────────────────────────────
     try:
@@ -59,9 +60,9 @@ async def ask(request: Request, body: AskRequest) -> dict:
             status_code=502, detail="Agent unavailable. Please try again later."
         ) from exc
 
-    # ── 2. Run pipeline ───────────────────────────────────────────────────────
+    # ── 2. Run pipeline (prices + news persisted inside when db_engine set) ──
     try:
-        result = run_pipeline(query_params.ticker, query_params.horizon, config)
+        result = run_pipeline(query_params.ticker, query_params.horizon, config, db_engine=db_engine)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -70,8 +71,7 @@ async def ask(request: Request, body: AskRequest) -> dict:
             status_code=500, detail="An internal error occurred. Please try again later."
         ) from exc
 
-    # ── 2b. Best-effort DB persistence ───────────────────────────────────────
-    db_engine = getattr(request.app.state, "db_engine", None)
+    # ── 2b. Best-effort score persistence ────────────────────────────────────
     if db_engine is not None:
         try:
             with get_session(db_engine) as session:

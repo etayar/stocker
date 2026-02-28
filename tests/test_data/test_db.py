@@ -17,13 +17,19 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.pool import StaticPool
 
+import pandas as pd
+
 from data.storage.db import (
     Base,
+    NewsRecord,
+    PriceRecord,
     ScoreRecord,
     get_engine,
     get_scores,
     get_session,
     init_db,
+    save_news,
+    save_prices,
     save_score,
 )
 
@@ -268,3 +274,207 @@ class TestGetEngine:
         assert engine is not None
         # Don't try to connect — just verify an engine object was returned
         engine.dispose()
+
+
+# ── save_prices ───────────────────────────────────────────────────────────────
+
+def _make_price_df(n: int = 5, start: str = "2026-01-01") -> pd.DataFrame:
+    """Return a tiny OHLCV DataFrame with DatetimeIndex."""
+    idx = pd.date_range(start=start, periods=n, freq="D", tz="UTC")
+    return pd.DataFrame(
+        {
+            "open":   [100.0 + i for i in range(n)],
+            "high":   [105.0 + i for i in range(n)],
+            "low":    [ 95.0 + i for i in range(n)],
+            "close":  [102.0 + i for i in range(n)],
+            "volume": [1_000_000.0 + i * 1000 for i in range(n)],
+        },
+        index=idx,
+    )
+
+
+class TestSavePrices:
+    def test_inserts_rows(self, engine):
+        df = _make_price_df(3)
+        with get_session(engine) as session:
+            save_prices(df, "AAPL", session)
+
+        with get_session(engine) as session:
+            rows = session.scalars(
+                __import__("sqlalchemy", fromlist=["select"]).select(PriceRecord)
+                .where(PriceRecord.ticker == "AAPL")
+            ).all()
+        assert len(rows) == 3
+
+    def test_returns_row_count(self, engine):
+        df = _make_price_df(4)
+        with get_session(engine) as session:
+            count = save_prices(df, "AAPL", session)
+        assert count == 4
+
+    def test_stores_all_ohlcv_fields(self, engine):
+        df = _make_price_df(1)
+        with get_session(engine) as session:
+            save_prices(df, "AAPL", session)
+
+        with get_session(engine) as session:
+            row = session.scalars(
+                __import__("sqlalchemy", fromlist=["select"]).select(PriceRecord)
+                .where(PriceRecord.ticker == "AAPL")
+            ).first()
+        assert row.close  == pytest.approx(102.0)
+        assert row.open   == pytest.approx(100.0)
+        assert row.high   == pytest.approx(105.0)
+        assert row.low    == pytest.approx( 95.0)
+        assert row.volume == pytest.approx(1_000_000.0)
+
+    def test_upserts_on_duplicate_date(self, engine):
+        """Re-saving the same date must update the record, not create a duplicate."""
+        df1 = _make_price_df(1)
+        with get_session(engine) as session:
+            save_prices(df1, "AAPL", session)
+
+        df2 = _make_price_df(1)
+        df2["close"] = 999.0
+        with get_session(engine) as session:
+            save_prices(df2, "AAPL", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            rows = session.scalars(
+                sa_select(PriceRecord).where(PriceRecord.ticker == "AAPL")
+            ).all()
+        assert len(rows) == 1
+        assert rows[0].close == pytest.approx(999.0)
+
+    def test_handles_nan_as_null(self, engine):
+        """NaN optional columns must be stored as NULL, not raise."""
+        import math
+        idx = pd.date_range("2026-01-01", periods=1, freq="D", tz="UTC")
+        df  = pd.DataFrame({"close": [102.0], "open": [float("nan")]}, index=idx)
+        with get_session(engine) as session:
+            save_prices(df, "AAPL", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            row = session.scalars(
+                sa_select(PriceRecord).where(PriceRecord.ticker == "AAPL")
+            ).first()
+        assert row.open is None
+
+    def test_date_stored_as_iso_string(self, engine):
+        idx = pd.date_range("2026-02-15", periods=1, freq="D", tz="UTC")
+        df  = pd.DataFrame({"close": [150.0]}, index=idx)
+        with get_session(engine) as session:
+            save_prices(df, "AAPL", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            row = session.scalars(
+                sa_select(PriceRecord).where(PriceRecord.ticker == "AAPL")
+            ).first()
+        assert row.date == "2026-02-15"
+
+    def test_filters_by_ticker(self, engine):
+        df = _make_price_df(2)
+        with get_session(engine) as session:
+            save_prices(df, "AAPL", session)
+        with get_session(engine) as session:
+            save_prices(df, "TSLA", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            aapl_rows = session.scalars(
+                sa_select(PriceRecord).where(PriceRecord.ticker == "AAPL")
+            ).all()
+        assert len(aapl_rows) == 2
+        assert all(r.ticker == "AAPL" for r in aapl_rows)
+
+
+# ── save_news ─────────────────────────────────────────────────────────────────
+
+def _make_articles(n: int = 3) -> list[dict]:
+    return [
+        {
+            "title":        f"Headline {i}",
+            "body":         f"Body text {i}",
+            "published_at": f"2026-02-{i+1:02d}T10:00:00+00:00",
+            "source":       "newsapi",
+            "url":          f"https://example.com/news/{i}",
+        }
+        for i in range(n)
+    ]
+
+
+class TestSaveNews:
+    def test_inserts_articles(self, engine):
+        articles = _make_articles(3)
+        with get_session(engine) as session:
+            save_news(articles, "AAPL", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            rows = session.scalars(
+                sa_select(NewsRecord).where(NewsRecord.ticker == "AAPL")
+            ).all()
+        assert len(rows) == 3
+
+    def test_returns_article_count(self, engine):
+        articles = _make_articles(5)
+        with get_session(engine) as session:
+            count = save_news(articles, "AAPL", session)
+        assert count == 5
+
+    def test_stores_all_fields(self, engine):
+        article = _make_articles(1)[0]
+        with get_session(engine) as session:
+            save_news([article], "AAPL", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            row = session.scalars(
+                sa_select(NewsRecord).where(NewsRecord.ticker == "AAPL")
+            ).first()
+        assert row.title        == "Headline 0"
+        assert row.body         == "Body text 0"
+        assert row.published_at == "2026-02-01T10:00:00+00:00"
+        assert row.source       == "newsapi"
+        assert row.url          == "https://example.com/news/0"
+
+    def test_upserts_on_duplicate(self, engine):
+        """Same (published_at, url) must update existing row, not insert duplicate."""
+        article = _make_articles(1)[0]
+        with get_session(engine) as session:
+            save_news([article], "AAPL", session)
+
+        updated = {**article, "title": "Updated Headline"}
+        with get_session(engine) as session:
+            save_news([updated], "AAPL", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            rows = session.scalars(
+                sa_select(NewsRecord).where(NewsRecord.ticker == "AAPL")
+            ).all()
+        assert len(rows) == 1
+        assert rows[0].title == "Updated Headline"
+
+    def test_empty_list_returns_zero(self, engine):
+        with get_session(engine) as session:
+            count = save_news([], "AAPL", session)
+        assert count == 0
+
+    def test_filters_by_ticker(self, engine):
+        articles = _make_articles(2)
+        with get_session(engine) as session:
+            save_news(articles, "AAPL", session)
+        with get_session(engine) as session:
+            save_news(articles, "TSLA", session)
+
+        from sqlalchemy import select as sa_select
+        with get_session(engine) as session:
+            aapl_rows = session.scalars(
+                sa_select(NewsRecord).where(NewsRecord.ticker == "AAPL")
+            ).all()
+        assert len(aapl_rows) == 2
+        assert all(r.ticker == "AAPL" for r in aapl_rows)
