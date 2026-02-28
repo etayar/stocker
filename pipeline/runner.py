@@ -42,7 +42,6 @@ import pipeline.preprocessors.text_preprocessor as _text_preprocessor
 
 # ── Implemented model imports ──────────────────────────────────────────────────
 # Imported as named bindings so tests can patch at pipeline.runner.<name>.
-from models.ts_model import train as ts_train
 from models.ts_model import predict as ts_predict
 from models.sentiment_model import load_sentiment_model, score_articles
 from models.ta_model import compute_ta_score
@@ -123,22 +122,19 @@ def run_pipeline(ticker: str, horizon: int, config: dict) -> dict:
               "signal":         "BUY" | "SELL" | "HOLD",
             }
     """
-    start        = config["stock"]["start_date"]
-    end          = config["stock"]["end_date"]
     price_source = config["data"]["price_source"]
     news_source  = config["data"]["news_source"]
 
     # ── 1 & 2: Fetch ──────────────────────────────────────────────────────────
-    prices_raw   = _price_fetcher.fetch_prices(ticker, start, end, price_source)
-    articles_raw = _news_fetcher.fetch_news(ticker, start, end, news_source)
+    prices_raw   = _price_fetcher.fetch_prices(ticker, price_source)
+    articles_raw = _news_fetcher.fetch_news(ticker, news_source)
 
     # ── 3 & 4: Preprocess ─────────────────────────────────────────────────────
     prices, _  = _price_preprocessor.preprocess_prices(prices_raw, config)
     articles   = _text_preprocessor.preprocess_articles(articles_raw, ticker, config)
 
     # ── 5: TS score ───────────────────────────────────────────────────────────
-    ts_model      = ts_train(prices, config)
-    ts_score_val  = ts_predict(ts_model, prices, horizon)
+    ts_score_val  = ts_predict(ticker, horizon, config)
 
     # ── 6: LLMS score ─────────────────────────────────────────────────────────
     sent_model    = load_sentiment_model(config)

@@ -1,7 +1,6 @@
 stock:
   ticker: "AAPL"               # Override via env: STOCK_TICKER
-  start_date: "2020-01-01"     # Historical data start
-  end_date: "2024-01-01"       # Historical data end
+  start_date: "2020-01-01"     # Historical data start (for initial fetch)
   prediction_horizon: 5        # Days ahead to signal (user configurable)
 
 data:
@@ -9,11 +8,27 @@ data:
   news_source: "newsapi"       # newsapi | finnhub | reddit
   raw_dir: "data/raw"
   processed_dir: "data/processed"
+  universe:                    # Tickers used for general model training
+    - "AAPL"
+    - "MSFT"
+    - "GOOGL"
+    - "AMZN"
+    - "NVDA"
+  walk_forward:
+    train_window_days: 252     # ~1 year of trading days per fold
+    val_window_days: 64        # Chronos native prediction length
+    step_days: 21              # Fold stride (~1 month)
 
 model:
   ts:
-    window_size: 30            # Lookback window in days
-    model_type: "lstm"         # lstm | arima | xgboost
+    chronos_base: "amazon/chronos-t5-small"   # Pretrained HuggingFace model
+    cache_ttl_days: 7          # Max age before ticker model is rebuilt
+    general_model_dir: "models/general"
+    cache_dir: "models/cache"
+    context_length: 512        # Historical rows fed to Chronos at inference
+    num_samples: 20            # Monte-Carlo samples for score distribution
+    n_training_epochs: 3       # Fine-tuning epochs (keep low — Chronos is pretrained)
+    learning_rate: 0.0001      # Adam LR for fine-tuning
   sentiment:
     model_name: "ProsusAI/finbert"
     max_length: 512
@@ -36,6 +51,9 @@ agent:
   model: "claude-sonnet-4-6"   # Anthropic model for param extraction + explanation
   max_tokens_parse: 256         # Token budget for structured extraction
   max_tokens_explain: 512       # Token budget for human-readable explanation
+
+scheduler:
+  retrain_interval_days: 14   # How often the general model is rebuilt
 
 api:
   host: "0.0.0.0"

@@ -39,15 +39,27 @@ _CONFIG = {
     "stock": {
         "ticker": "AAPL",
         "start_date": "2020-01-01",
-        "end_date": "2024-01-01",
         "prediction_horizon": 5,
     },
     "data": {
         "price_source": "yfinance",
         "news_source": "newsapi",
+        "universe": ["AAPL"],
+        "walk_forward": {
+            "train_window_days": 252,
+            "val_window_days":   64,
+            "step_days":         21,
+        },
     },
     "model": {
-        "ts": {"window_size": 30},
+        "ts": {
+            "chronos_base":      "amazon/chronos-t5-small",
+            "cache_ttl_days":    7,
+            "general_model_dir": "models/general",
+            "cache_dir":         "models/cache",
+            "context_length":    64,
+            "num_samples":       5,
+        },
         "sentiment": {
             "model_name": "ProsusAI/finbert",
             "max_length": 512,
@@ -100,6 +112,7 @@ def pipeline_mocks():
             create=True,
         ))
 
+
         # -- Preprocessors (stub modules, create=True) --
         stack.enter_context(patch(
             "pipeline.preprocessors.price_preprocessor.preprocess_prices",
@@ -113,8 +126,6 @@ def pipeline_mocks():
         ))
 
         # -- Model functions (bound into runner.py via `from … import`) --
-        stack.enter_context(patch("pipeline.runner.ts_train",
-                                  return_value=MagicMock()))
         stack.enter_context(patch("pipeline.runner.ts_predict",
                                   return_value=_TS_SCORE))
         stack.enter_context(patch("pipeline.runner.load_sentiment_model",
@@ -176,8 +187,8 @@ def test_run_pipeline_with_mocked_components(pipeline_mocks):
 
 def test_run_pipeline_signal_above_buy_threshold(pipeline_mocks):
     """All-high scores → compound above buy_threshold → BUY."""
-    with patch("pipeline.runner.ts_predict",    return_value=0.9), \
-         patch("pipeline.runner.score_articles", return_value=0.9), \
+    with patch("pipeline.runner.ts_predict",      return_value=0.9), \
+         patch("pipeline.runner.score_articles",   return_value=0.9), \
          patch("pipeline.runner.compute_ta_score", return_value=0.9):
         result = run_pipeline("AAPL", 5, _CONFIG)
     assert result["signal"] == "BUY"
@@ -185,8 +196,8 @@ def test_run_pipeline_signal_above_buy_threshold(pipeline_mocks):
 
 def test_run_pipeline_signal_below_sell_threshold(pipeline_mocks):
     """All-low scores → compound below sell_threshold → SELL."""
-    with patch("pipeline.runner.ts_predict",    return_value=0.1), \
-         patch("pipeline.runner.score_articles", return_value=0.1), \
+    with patch("pipeline.runner.ts_predict",      return_value=0.1), \
+         patch("pipeline.runner.score_articles",   return_value=0.1), \
          patch("pipeline.runner.compute_ta_score", return_value=0.1):
         result = run_pipeline("AAPL", 5, _CONFIG)
     assert result["signal"] == "SELL"
