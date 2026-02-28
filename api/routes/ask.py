@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request
 logger = logging.getLogger(__name__)
 
 from api.agent import explain_signal, parse_query
+from api.limiter import LIMIT_ASK, limiter
 from api.schemas import AskRequest, AskResponse, QueryParams
 from data.storage.db import get_session, save_score
 from pipeline.runner import run_pipeline
@@ -27,6 +28,7 @@ router = APIRouter()
 
 
 @router.post("/ask", response_model=AskResponse)
+@limiter.limit(LIMIT_ASK)
 async def ask(request: Request, body: AskRequest) -> dict:
     """Parse a natural-language prompt and return a pipeline signal + explanation.
 

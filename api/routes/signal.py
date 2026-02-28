@@ -27,6 +27,7 @@ import re
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from api.limiter import LIMIT_SCORES, LIMIT_SIGNAL, limiter
 from api.schemas import HistoricalScoreRecord, SignalResponse
 from data.storage.db import get_session, get_scores, save_score
 from pipeline.runner import run_pipeline
@@ -38,6 +39,7 @@ _TICKER_RE = re.compile(r"^[A-Z0-9.]{1,10}$")
 
 
 @router.get("/signal", response_model=SignalResponse)
+@limiter.limit(LIMIT_SIGNAL)
 async def get_signal(
     request: Request,
     ticker: str = Query(
@@ -106,6 +108,7 @@ def _record_to_dict(record) -> dict:
     "/scores/{ticker}",
     response_model=list[HistoricalScoreRecord],
 )
+@limiter.limit(LIMIT_SCORES)
 async def get_scores_endpoint(
     ticker: str,
     request: Request,
