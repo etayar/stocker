@@ -8,13 +8,14 @@ instantly without network access, a database, or model weights.
 
 Patching strategy
 -----------------
-Fetchers / preprocessors are stub modules (docstring only), so they are
-imported in runner.py as module objects and called via attribute access
-(e.g. _price_fetcher.fetch_prices).  We patch those attributes with
-create=True so the attribute is added temporarily to the real module object.
+fetch_ticker is now a real implementation imported as a named binding into
+runner.py, so it is patched at pipeline.runner.fetch_ticker.
 
-Model functions (ts_train, ts_predict, …) are imported into runner.py as
-named bindings, so we patch them at pipeline.runner.<name>.
+The news fetcher and text preprocessor are still stub modules; their
+attributes are added temporarily via create=True.
+
+All model functions (ts_predict, score_articles, compute_ta_score, …) are
+imported as named bindings and patched at pipeline.runner.<name>.
 """
 
 from __future__ import annotations
@@ -100,23 +101,16 @@ def pipeline_mocks():
     Yields a dict of the fixed scores so tests can compute expected values.
     """
     with ExitStack() as stack:
-        # -- Fetchers (stub modules, create=True adds the attr temporarily) --
+        # -- Price fetch (real implementation, named binding in runner) --------
         stack.enter_context(patch(
-            "data.fetchers.price_fetcher.fetch_prices",
+            "pipeline.runner.fetch_ticker",
             return_value=_DUMMY_PRICES,
-            create=True,
         ))
+
+        # -- News fetcher / text preprocessor (stub modules, create=True) -----
         stack.enter_context(patch(
             "data.fetchers.news_fetcher.fetch_news",
             return_value=_DUMMY_ARTICLES,
-            create=True,
-        ))
-
-
-        # -- Preprocessors (stub modules, create=True) --
-        stack.enter_context(patch(
-            "pipeline.preprocessors.price_preprocessor.preprocess_prices",
-            return_value=(_DUMMY_PRICES, None),
             create=True,
         ))
         stack.enter_context(patch(
@@ -125,7 +119,7 @@ def pipeline_mocks():
             create=True,
         ))
 
-        # -- Model functions (bound into runner.py via `from … import`) --
+        # -- Model functions (named bindings in runner) ------------------------
         stack.enter_context(patch("pipeline.runner.ts_predict",
                                   return_value=_TS_SCORE))
         stack.enter_context(patch("pipeline.runner.load_sentiment_model",
@@ -201,6 +195,31 @@ def test_run_pipeline_signal_below_sell_threshold(pipeline_mocks):
          patch("pipeline.runner.compute_ta_score", return_value=0.1):
         result = run_pipeline("AAPL", 5, _CONFIG)
     assert result["signal"] == "SELL"
+
+
+def test_run_pipeline_fetch_ticker_called_with_ticker(pipeline_mocks):
+    """fetch_ticker must be called with the ticker passed to run_pipeline."""
+    with patch("pipeline.runner.fetch_ticker", return_value=_DUMMY_PRICES) as mock_ft:
+        run_pipeline("NVDA", 5, _CONFIG)
+    assert mock_ft.call_args[0][0] == "NVDA"
+
+
+def test_run_pipeline_ts_predict_called_with_ticker_and_horizon(pipeline_mocks):
+    """ts_predict must receive (ticker, horizon, config) — no prices."""
+    with patch("pipeline.runner.ts_predict", return_value=_TS_SCORE) as mock_ts:
+        run_pipeline("TSLA", 10, _CONFIG)
+    args = mock_ts.call_args[0]
+    assert args[0] == "TSLA"
+    assert args[1] == 10
+
+
+def test_run_pipeline_ta_receives_fetched_prices(pipeline_mocks):
+    """compute_ta_score must receive the DataFrame from fetch_ticker."""
+    custom_prices = pd.DataFrame({"close": [200.0, 201.0, 202.0]})
+    with patch("pipeline.runner.fetch_ticker", return_value=custom_prices), \
+         patch("pipeline.runner.compute_ta_score", return_value=_TA_SCORE) as mock_ta:
+        run_pipeline("AAPL", 5, _CONFIG)
+    pd.testing.assert_frame_equal(mock_ta.call_args[0][0], custom_prices)
 
 
 # ── load_config tests ─────────────────────────────────────────────────────────
