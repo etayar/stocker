@@ -28,6 +28,7 @@ import re
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from api.schemas import HistoricalScoreRecord, SignalResponse
+from data.storage.db import get_session, get_scores, save_score
 from pipeline.runner import run_pipeline
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,6 @@ async def get_signal(
     try:
         config = request.app.state.config
         result = run_pipeline(ticker_up, horizon, config)
-        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -76,19 +76,49 @@ async def get_signal(
             status_code=500, detail="An internal error occurred. Please try again later."
         ) from exc
 
+    db_engine = getattr(request.app.state, "db_engine", None)
+    if db_engine is not None:
+        try:
+            with get_session(db_engine) as session:
+                save_score(result, session)
+        except Exception as exc:
+            logger.warning("Failed to persist score: %s", exc)
+
+    return result
+
+
+def _record_to_dict(record) -> dict:
+    """Serialise a ScoreRecord ORM row to a dict matching HistoricalScoreRecord."""
+    return {
+        "id":             record.id,
+        "ticker":         record.ticker,
+        "run_date":       record.run_date,
+        "horizon":        record.horizon,
+        "ts_score":       record.ts_score,
+        "llms_score":     record.llms_score,
+        "ta_score":       record.ta_score,
+        "compound_score": record.compound_score,
+        "signal":         record.signal,
+    }
+
 
 @router.get(
     "/scores/{ticker}",
     response_model=list[HistoricalScoreRecord],
 )
-async def get_scores(
+async def get_scores_endpoint(
     ticker: str,
+    request: Request,
     limit: int = Query(30, description="Max records to return", ge=1, le=500),
 ) -> list:
-    """Return historical pipeline results for *ticker*.
-
-    The database persistence layer is not yet implemented; this endpoint
-    always returns an empty list until it is wired up.
-    """
-    # TODO: query data.storage.db once the persistence layer is implemented.
-    return []
+    """Return historical pipeline results for *ticker* from the database."""
+    db_engine = getattr(request.app.state, "db_engine", None)
+    if db_engine is None:
+        return []
+    try:
+        with get_session(db_engine) as session:
+            records = get_scores(ticker.upper(), limit, session)
+        return [_record_to_dict(r) for r in records]
+    except Exception as exc:
+        logger.error("Failed to fetch scores for ticker=%s: %s", ticker, exc, exc_info=True)
+        return []

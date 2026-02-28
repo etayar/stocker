@@ -27,12 +27,26 @@ from fastapi import FastAPI
 
 from api.routes.ask import router as ask_router
 from api.routes.signal import router as signal_router
+from data.storage.db import get_engine, init_db
 from pipeline.runner import load_config
 
 logger = logging.getLogger(__name__)
 
 # Resolve config.yaml relative to this file so the app works from any CWD.
 _CONFIG_PATH = str(pathlib.Path(__file__).parents[1] / "config.yaml")
+
+
+def _init_db_engine(config: dict):
+    """Initialise the DB engine and create tables; return None on failure."""
+    engine = get_engine(config)
+    if engine is None:
+        return None
+    try:
+        init_db(engine)
+    except Exception as exc:
+        logger.warning("DB init failed — persistence disabled: %s", exc)
+        return None
+    return engine
 
 
 def _make_anthropic_client():
@@ -54,8 +68,10 @@ async def lifespan(app: FastAPI):
     """Load config and init optional Anthropic client once at startup."""
     app.state.config = load_config(_CONFIG_PATH)
     app.state.anthropic_client = _make_anthropic_client()
+    app.state.db_engine = _init_db_engine(app.state.config)
     yield
-    # Nothing to tear down yet (no persistent connections).
+    if app.state.db_engine:
+        app.state.db_engine.dispose()
 
 
 app = FastAPI(

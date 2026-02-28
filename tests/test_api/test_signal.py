@@ -13,8 +13,11 @@ from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from api.main import app
+from data.storage.db import ScoreRecord, get_scores, get_session, init_db
 
 # ── Shared mock data ──────────────────────────────────────────────────────────
 
@@ -186,8 +189,8 @@ def test_get_scores_returns_list(client):
     assert isinstance(response.json(), list)
 
 
-def test_get_scores_empty_until_db_implemented(client):
-    """DB not yet wired up — endpoint always returns []."""
+def test_get_scores_empty_when_no_db_engine(client):
+    """When db_engine is None (no credentials), endpoint returns []."""
     response = client.get("/scores/TSLA")
     assert response.json() == []
 
@@ -202,3 +205,80 @@ def test_get_scores_limit_zero_returns_422(client):
     """limit must be >= 1."""
     response = client.get("/scores/AAPL?limit=0")
     assert response.status_code == 422
+
+
+# ── DB integration tests ──────────────────────────────────────────────────────
+
+@pytest.fixture
+def client_with_db(client):
+    """Function-scoped: reuse module client but inject a fresh SQLite engine.
+
+    StaticPool ensures all connections share the same in-memory database so
+    tables created by init_db() are visible to every subsequent query.
+    """
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    init_db(engine)
+    original_engine = getattr(app.state, "db_engine", None)
+    app.state.db_engine = engine
+    yield client
+    engine.dispose()
+    app.state.db_engine = original_engine
+
+
+def test_get_signal_persists_score_to_db(client_with_db):
+    """Calling /signal should write a ScoreRecord to the DB."""
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT):
+        response = client_with_db.get("/signal?ticker=AAPL")
+    assert response.status_code == 200
+
+    engine = app.state.db_engine
+    with get_session(engine) as session:
+        records = get_scores("AAPL", 10, session)
+    assert len(records) == 1
+    assert records[0].ticker == "AAPL"
+    assert records[0].signal == _MOCK_RESULT["signal"]
+
+
+def test_get_scores_returns_persisted_records(client_with_db):
+    """After /signal populates the DB, /scores/{ticker} should return the record."""
+    with patch("api.routes.signal.run_pipeline", return_value=_MOCK_RESULT):
+        client_with_db.get("/signal?ticker=AAPL")
+
+    response = client_with_db.get("/scores/AAPL")
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["ticker"] == "AAPL"
+    assert data[0]["signal"] == _MOCK_RESULT["signal"]
+
+
+def test_get_scores_respects_limit(client_with_db):
+    """With 3 records in DB, limit=2 should return only 2."""
+    for date in ("2026-02-25", "2026-02-26", "2026-02-27"):
+        mock = {**_MOCK_RESULT, "run_date": date}
+        with patch("api.routes.signal.run_pipeline", return_value=mock):
+            client_with_db.get("/signal?ticker=AAPL")
+
+    response = client_with_db.get("/scores/AAPL?limit=2")
+    assert response.status_code == 200
+    assert len(response.json()) == 2
+
+
+def test_get_scores_filters_by_ticker(client_with_db):
+    """Scores for TSLA must not appear when querying AAPL."""
+    aapl_mock = {**_MOCK_RESULT, "ticker": "AAPL"}
+    tsla_mock = {**_MOCK_RESULT, "ticker": "TSLA"}
+
+    with patch("api.routes.signal.run_pipeline", return_value=aapl_mock):
+        client_with_db.get("/signal?ticker=AAPL")
+    with patch("api.routes.signal.run_pipeline", return_value=tsla_mock):
+        client_with_db.get("/signal?ticker=TSLA")
+
+    response = client_with_db.get("/scores/AAPL")
+    data = response.json()
+    assert all(r["ticker"] == "AAPL" for r in data)
+    assert len(data) == 1

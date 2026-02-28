@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 from api.agent import explain_signal, parse_query
 from api.schemas import AskRequest, AskResponse, QueryParams
+from data.storage.db import get_session, save_score
 from pipeline.runner import run_pipeline
 
 router = APIRouter()
@@ -66,6 +67,15 @@ async def ask(request: Request, body: AskRequest) -> dict:
         raise HTTPException(
             status_code=500, detail="An internal error occurred. Please try again later."
         ) from exc
+
+    # ── 2b. Best-effort DB persistence ───────────────────────────────────────
+    db_engine = getattr(request.app.state, "db_engine", None)
+    if db_engine is not None:
+        try:
+            with get_session(db_engine) as session:
+                save_score(result, session)
+        except Exception as exc:
+            logger.warning("Failed to persist score: %s", exc)
 
     # ── 3. Generate explanation (non-fatal — fallback on failure) ─────────────
     try:
